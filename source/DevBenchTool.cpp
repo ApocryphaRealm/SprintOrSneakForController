@@ -67,8 +67,8 @@ namespace DevBenchTool
 			const float mx = controls ? controls->data.moveInputVec.x : 0.0f;
 			const float my = controls ? controls->data.moveInputVec.y : 0.0f;
 			const std::string out = std::format(
-				R"({{"ok":{},"op":"{}","installed":{},"outermost":{},"holdSecs":{:.2f},"holdSetting":{:.2f},"releaseGapSecs":{:.2f},"dodgeIniFound":{},"dodgeSprintTap":{},"dodgeTapSecs":{:.2f},"events":{},"presses":{},"taps":{},"crouchOn":{},"crouchOff":{},"sprintHolds":{},"standAndSprint":{},"passedMounted":{},"held":{},"heldSecs":{:.2f},"mode":"{}","crouchChanged":{},"driving":{},"last":"{}","sneaking":{},"sprinting":{},"sprintFlag":{},"swimming":{},"mounted":{},"moveInput":[{:.2f},{:.2f}]}})",
-				ok, op.empty() ? "state" : op, s.installed, s.outermost, s.holdSecs, s.holdSetting, s.releaseGapSecs, s.dodgeTapRead, s.dodgeSprintTap, s.dodgeTapSecs, s.events, s.presses, s.taps,
+				R"({{"ok":{},"op":"{}","installed":{},"outermost":{},"holdSecs":{:.2f},"holdSetting":{:.2f},"releaseGapSecs":{:.2f},"takeAPeekLoaded":{},"takeAPeekDoors":{},"leftToPeek":{},"dodgeIniFound":{},"dodgeSprintTap":{},"dodgeTapSecs":{:.2f},"events":{},"presses":{},"taps":{},"crouchOn":{},"crouchOff":{},"sprintHolds":{},"standAndSprint":{},"passedMounted":{},"held":{},"heldSecs":{:.2f},"mode":"{}","crouchChanged":{},"driving":{},"last":"{}","sneaking":{},"sprinting":{},"sprintFlag":{},"swimming":{},"mounted":{},"moveInput":[{:.2f},{:.2f}]}})",
+				ok, op.empty() ? "state" : op, s.installed, s.outermost, s.holdSecs, s.holdSetting, s.releaseGapSecs, s.takeAPeekLoaded, s.takeAPeekDoors, s.leftToPeek, s.dodgeTapRead, s.dodgeSprintTap, s.dodgeTapSecs, s.events, s.presses, s.taps,
 				s.crouchOn, s.crouchOff, s.sprintHolds, s.standAndSprint, s.passedMounted, s.held, s.heldSecs, s.mode, s.crouchChanged, s.driving, Escaped(s.last),
 				state && state->IsSneaking(), state && state->IsSprinting(), player && player->GetPlayerRuntimeData().playerFlags.isSprinting,
 				state && state->IsSwimming(), player && player->IsOnMount(), mx, my);
@@ -88,7 +88,7 @@ namespace DevBenchTool
 		}
 		constexpr const char* descriptor =
 			"{"
-			"\"description\":\"Sprint or Sneak for Controller live state and driver. op=state (default): hook installed and outermost, the hold time, TK Dodge AIO's sprint tap as read, counts of presses, taps, crouches, stands and sprints, the current hold's mode, and the player's sneaking, sprinting, swimming and move input. op=press [moving=true|false]: presses the gamepad Sprint button through the game's SprintHandler and holds it every frame until op=release; moving overrides the stick for this mod's still-or-moving choice only (a real sprint still needs the stick). op=reread: reads SprintOrSneakForController.ini (fHoldSeconds, fReleaseGapSeconds) and TK Dodge AIO.s settings again; state shows holdSetting (0 automatic), holdSecs in force and releaseGapSecs.\","
+			"\"description\":\"Sprint or Sneak for Controller live state and driver. op=state (default): hook installed and outermost, the hold time, TK Dodge AIO's sprint tap as read, counts of presses, taps, crouches, stands and sprints, the current hold's mode, and the player's sneaking, sprinting, swimming and move input. op=press [moving=true|false]: presses the gamepad Sprint button through the game's SprintHandler and holds it every frame until op=release; moving overrides the stick for this mod's still-or-moving choice only (a real sprint still needs the stick). op=reread: reads SprintOrSneakForController.ini (fHoldSeconds, fReleaseGapSeconds, bTakeAPeekDoors) and TK Dodge AIO.s settings again; state shows holdSetting (0 automatic), holdSecs in force and releaseGapSecs.\","
 			"\"inputSchema\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"moving\":{\"type\":\"boolean\"}}},"
 			"\"readOnly\":false"
 			"}";

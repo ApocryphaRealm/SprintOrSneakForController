@@ -28,6 +28,10 @@
 // when its sprint tap is on and that is longer: a press
 // TK Dodge still counts as a dodge tap must not also crouch or sprint.
 //
+// TAKE A PEEK (the owner, 2026-11-07: holding near a door would be both a peek and a crouch change). While Take A Peek - New Stealth
+// Mechanic.esp is loaded and the INI's bTakeAPeekDoors is on, a hold made crouched and still with the crosshair on a closed door (Take
+// a Peek's own test, in reach because the game sets the crosshair reference only then) changes nothing: the peek is Take a Peek's.
+//
 // CROUCH. The game's own sneak setter (1.5.97 id 36926) as Separate Swimming Controls replays its off branch: the iIsInSneak graph
 // variable, ActorState's sneaking bit, and the SneakStart / SneakStop graph event. It is not reached through the SneakHandler, so a
 // mod that listens to the Sneak button (TK Dodge's sneak-key dodge, Take a Peek's hold-Sneak-to-peek) sees no press from it.
@@ -54,6 +58,8 @@ namespace sprint
 		constexpr float kAutoHold = 0.0f;          // fHoldSeconds=0: automatic, kHoldSecs or TK Dodge AIO's tap time
 		constexpr float kHoldSecs = 0.30f;         // the automatic hold without TK Dodge's sprint tap
 		constexpr float kDefaultGapSecs = 0.25f;   // fReleaseGapSeconds: no event for this long, the button was let go unheard
+		constexpr bool kDefaultTakeAPeekDoors = true;  // bTakeAPeekDoors: a crouched, still hold at a closed door is Take a Peek's
+		constexpr std::string_view kTakeAPeekPlugin = "Take A Peek - New Stealth Mechanic.esp";
 		constexpr float kMoveDeadzone = 0.15f;     // the left stick's push that counts as moving (moveInputVec length)
 
 		enum class Mode : int
@@ -83,7 +89,9 @@ namespace sprint
 		std::atomic<bool> g_dodgeRead{ false };
 		std::atomic<bool> g_dodgeSprintTap{ false };
 		std::atomic<float> g_dodgeTapSecs{ 0.0f };
-		std::atomic<std::uint64_t> g_events{ 0 }, g_presses{ 0 }, g_taps{ 0 }, g_crouchOn{ 0 }, g_crouchOff{ 0 }, g_sprintHolds{ 0 }, g_standAndSprint{ 0 }, g_passedMounted{ 0 };
+		std::atomic<std::uint64_t> g_events{ 0 }, g_presses{ 0 }, g_taps{ 0 }, g_crouchOn{ 0 }, g_crouchOff{ 0 }, g_sprintHolds{ 0 }, g_standAndSprint{ 0 }, g_passedMounted{ 0 }, g_leftToPeek{ 0 };
+		std::atomic<bool> g_takeAPeekLoaded{ false };
+		std::atomic<bool> g_takeAPeekDoors{ true };  // bTakeAPeekDoors
 		std::atomic<int> g_modeShown{ 0 };
 		std::atomic<bool> g_heldShown{ false };
 		std::atomic<float> g_heldSecsShown{ 0.0f };
@@ -171,6 +179,23 @@ namespace sprint
 			Publish(0.0f);
 		}
 
+		// Take a Peek's own test for a door it peeks through (Keyhole_Exit.psc, its Sneak-hold release): the crosshair reference,
+		// which the game sets only within activation reach, has a Door base and an open state of 3 (closed). Its exceptions
+		// formlist is not read here. Only while Take a Peek's plugin is loaded and bTakeAPeekDoors is on.
+		bool PeekDoorAhead()
+		{
+			if (!g_takeAPeekLoaded.load(std::memory_order_relaxed) || !g_takeAPeekDoors.load(std::memory_order_relaxed)) { return false; }
+			auto* pick = RE::CrosshairPickData::GetSingleton();
+			if (!pick) { return false; }
+			const auto ref = pick->target.get();
+			if (!ref) { return false; }
+			auto* base = ref->GetBaseObject();
+			const bool door = base && base->Is(RE::FormType::Door);
+			const bool closed = door && RE::BGSOpenCloseForm::GetOpenState(ref.get()) == RE::BGSOpenCloseForm::OPEN_STATE::kClosed;
+			logger::debug("sprint: crosshair {:08X} {} {}", ref->GetFormID(), door ? "is a door" : "is not a door", door ? (closed ? "(closed: Take a Peek's)" : "(not closed)") : "");
+			return closed;
+		}
+
 		// Past the hold time: what this hold does now. Called every held frame; each branch acts once.
 		void Decide(RE::PlayerCharacter* a_player, const RE::PlayerControlsData* a_data)
 		{
@@ -202,6 +227,16 @@ namespace sprint
 			}
 			if (g_hold.mode == Mode::kUndecided && !g_hold.crouchChanged && !swimming)
 			{
+				// Crouched and still at a door Take a Peek can peek through: the hold is Take a Peek's, so crouch is not changed
+				// (the owner, 2026-11-07). The hold is spent: it changes nothing else, as a crouch change would not.
+				if (sneaking && PeekDoorAhead())
+				{
+					g_hold.crouchChanged = true;
+					g_hold.mode = Mode::kCrouch;
+					g_leftToPeek.fetch_add(1, std::memory_order_relaxed);
+					SetLast("hold while crouched and still at a closed door: left to Take a Peek, crouch unchanged");
+					return;
+				}
 				SetSneaking(!sneaking);
 				g_hold.crouchChanged = true;
 				g_hold.mode = Mode::kCrouch;
@@ -381,10 +416,15 @@ namespace sprint
 		bool ownFound = false;
 		float setHold = kAutoHold;
 		float gap = kDefaultGapSecs;
+		bool peekDoors = kDefaultTakeAPeekDoors;
 		ReadIni(plugins / "SprintOrSneakForController.ini", ownFound, [&](const std::string& a_key, const std::string& a_value) {
 			if (a_key == "fHoldSeconds") { setHold = ReadFloat(a_value, kAutoHold); }
 			else if (a_key == "fReleaseGapSeconds") { gap = ReadFloat(a_value, kDefaultGapSecs); }
+			else if (a_key == "bTakeAPeekDoors") { peekDoors = ReadBool(a_value); }
 		});
+		g_takeAPeekDoors = peekDoors;
+		auto* data = RE::TESDataHandler::GetSingleton();
+		g_takeAPeekLoaded = data && data->LookupModByName(kTakeAPeekPlugin);
 		setHold = setHold <= 0.0f ? kAutoHold : std::clamp(setHold, 0.05f, 2.0f);
 		gap = std::clamp(gap, 0.05f, 2.0f);
 
@@ -404,9 +444,10 @@ namespace sprint
 		g_holdSetting = setHold;
 		g_holdSecs = hold;
 		g_gapMs = static_cast<std::int64_t>(gap * 1000.0f + 0.5f);
-		logger::info("sprint: settings {}: fHoldSeconds={:.2f} ({}), fReleaseGapSeconds={:.2f}; TK Dodge AIO {}; a hold is {:.2f} s",
-			ownFound ? "read" : "file not found, defaults", automatic ? 0.0f : setHold, automatic ? "automatic" : "set", gap,
-			found ? (tap ? std::format("sprint tap on ({:.2f} s)", secs) : std::string("sprint tap off")) : std::string("not found"), hold);
+		logger::info("sprint: settings {}: fHoldSeconds={:.2f} ({}), fReleaseGapSeconds={:.2f}, bTakeAPeekDoors={}; TK Dodge AIO {}; Take a Peek {}; a hold is {:.2f} s",
+			ownFound ? "read" : "file not found, defaults", automatic ? 0.0f : setHold, automatic ? "automatic" : "set", gap, peekDoors ? 1 : 0,
+			found ? (tap ? std::format("sprint tap on ({:.2f} s)", secs) : std::string("sprint tap off")) : std::string("not found"),
+			g_takeAPeekLoaded.load() ? "loaded" : "not loaded", hold);
 		if (!automatic && tap && setHold < secs)
 		{
 			logger::warn("sprint: fHoldSeconds {:.2f} is shorter than TK Dodge AIO's tap time {:.2f}: a press between them both dodges and crouches or sprints", setHold, secs);
@@ -449,6 +490,9 @@ namespace sprint
 		s.holdSecs = g_holdSecs.load();
 		s.holdSetting = g_holdSetting.load();
 		s.releaseGapSecs = static_cast<float>(g_gapMs.load()) / 1000.0f;
+		s.takeAPeekLoaded = g_takeAPeekLoaded.load();
+		s.takeAPeekDoors = g_takeAPeekDoors.load();
+		s.leftToPeek = g_leftToPeek.load();
 		s.dodgeTapRead = g_dodgeRead.load();
 		s.dodgeSprintTap = g_dodgeSprintTap.load();
 		s.dodgeTapSecs = g_dodgeTapSecs.load();

@@ -17,7 +17,12 @@ a horse are left as the game has them. No plugin, no scripts; nothing is stored 
 SETTINGS
 No in-game page. SKSE\Plugins\SprintOrSneakForController.ini holds the two delays, each explained in the
 file: fHoldSeconds (how long a press must be held to count as a hold; 0 = automatic: 0.30 seconds, or TK
-Dodge AIO's tap time when its Sprint-tap dodge is on) and fReleaseGapSeconds.
+Dodge AIO's tap time when its Sprint-tap dodge is on) and fReleaseGapSeconds, and bTakeAPeekDoors (below).
+
+TAKE A PEEK
+With Take a Peek installed, a Sprint hold while you are crouched, standing still and looking at a closed door
+in reach does not stand you up: the hold is left to Take a Peek, so you peek. Elsewhere the hold works as usual.
+Turn it off with bTakeAPeekDoors = 0.
 
 WORKS WITH
 - Walk or Run for Controller: sprint works on its Walk setting as well.

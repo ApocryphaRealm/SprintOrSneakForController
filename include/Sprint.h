@@ -21,6 +21,9 @@ namespace sprint
 		float holdSecs = 0.0f;           // in force: a press held this long is a hold; shorter is a tap
 		float holdSetting = 0.0f;        // fHoldSeconds as read; 0 automatic
 		float releaseGapSecs = 0.0f;     // fReleaseGapSeconds
+		bool takeAPeekLoaded = false;    // Take A Peek - New Stealth Mechanic.esp is in the load order
+		bool takeAPeekDoors = false;     // bTakeAPeekDoors
+		std::uint64_t leftToPeek = 0;    // crouched, still holds at a closed door left to Take a Peek
 		bool dodgeTapRead = false;       // TK Dodge AIO's settings were found
 		bool dodgeSprintTap = false;     // its bUseSprintKey
 		float dodgeTapSecs = 0.0f;       // its fSprintingPressDuration
