@@ -1,5 +1,5 @@
 // Sprint or Sneak for Controller - own code, GPL-3.0-or-later. On a controller the Sprint button holds to sprint and, standing still,
-// holds to crouch or stand; a tap is left free. No settings. See the head of source/Sprint.cpp.
+// holds to crouch or stand; a tap is left free. No in-game page; the delays are in its INI. See the head of source/Sprint.cpp.
 #include "PCH.h"
 
 #include "DevBenchTool.h"
@@ -24,8 +24,8 @@ namespace
 			break;
 		case SKSE::MessagingInterface::kPostLoadGame:
 		case SKSE::MessagingInterface::kNewGame:
-			// TK Dodge AIO's page may have changed its sprint tap since the last game.
-			sprint::ReadDodgeTap();
+			// The INI, and TK Dodge AIO's page, may have changed since the last game.
+			sprint::ReadSettings();
 			break;
 		default:
 			break;
@@ -41,7 +41,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 	if (!AddressLibraryGuard::Guard("Sprint or Sneak for Controller")) { return true; }
 	SKSE::Init(a_skse);
 
-	// No settings, so no log level to read: debug, a few lines per press (rule 14).
+	// The INI holds only the delays, so the log level is fixed: debug, a few lines per press (rule 14).
 	SKSE::log::set_level(spdlog::level::debug, spdlog::level::info);
 	logger::info("Sprint or Sneak for Controller {} loading", SKSE::PluginDeclaration::GetSingleton()->GetVersion().string("."));
 

@@ -12,7 +12,12 @@ On a controller, the Sprint button does both jobs.
   passed, so a press is never both a dodge and a crouch.
 
 Whatever button Sprint is mapped to is the button this works on. The keyboard's Sprint key and riding
-a horse are left as the game has them. No settings, no plugin, no scripts; nothing is stored in your save.
+a horse are left as the game has them. No plugin, no scripts; nothing is stored in your save.
+
+SETTINGS
+No in-game page. SKSE\Plugins\SprintOrSneakForController.ini holds the two delays, each explained in the
+file: fHoldSeconds (how long a press must be held to count as a hold; 0 = automatic: 0.30 seconds, or TK
+Dodge AIO's tap time when its Sprint-tap dodge is on) and fReleaseGapSeconds.
 
 WORKS WITH
 - Walk or Run for Controller: sprint works on its Walk setting as well.

@@ -7,7 +7,7 @@
 namespace sprint
 {
 	void Install();      // at kDataLoaded; the vtable write itself runs one frame later, after every plugin's kDataLoaded
-	void ReadDodgeTap();  // at kDataLoaded and every load: TK Dodge AIO's sprint-tap window, which lengthens the hold
+	void ReadSettings();  // at kDataLoaded, every load and DevBench op=reread: this mod's INI and TK Dodge AIO's sprint tap
 
 	// DevBench driving (main thread work is queued from any thread): a press of the Sprint button through the game's own
 	// SprintHandler, held until Release, so the whole handler chain sees it as the pad's.
@@ -18,7 +18,9 @@ namespace sprint
 	{
 		bool installed = false;
 		bool outermost = false;          // the SprintHandler slot still points at this mod's function
-		float holdSecs = 0.0f;           // a press held this long is a hold; shorter is a tap
+		float holdSecs = 0.0f;           // in force: a press held this long is a hold; shorter is a tap
+		float holdSetting = 0.0f;        // fHoldSeconds as read; 0 automatic
+		float releaseGapSecs = 0.0f;     // fReleaseGapSeconds
 		bool dodgeTapRead = false;       // TK Dodge AIO's settings were found
 		bool dodgeSprintTap = false;     // its bUseSprintKey
 		float dodgeTapSecs = 0.0f;       // its fSprintingPressDuration

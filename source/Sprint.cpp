@@ -6,7 +6,8 @@
 //   - moving, HOLD Sprint: sprint, only while the button is held. Crouched, it stands you up and sprints;
 //   - one continuous hold changes crouch once at most; the next change needs a fresh press;
 //   - a TAP does nothing here, so a dodge mod's sprint tap (TK Dodge AIO's bUseSprintKey) keeps working.
-// No settings. The keyboard's Sprint key and riding a horse are left wholly to the game.
+// No in-game page (the owner, 2026-11-07); the delays are in SKSE/Plugins/SprintOrSneakForController.ini. The keyboard's Sprint key and riding
+// a horse are left wholly to the game.
 //
 // WHERE. The game's SprintHandler (PlayerControls's handler for the Sprint user event), slot 4 of its vtable, ProcessButton. The game
 // calls it with a button event every frame the button is down and once more on the release, through the control map, so a button UVC
@@ -23,7 +24,8 @@
 // frame's update reads it. A hold is told from a tap by this mod's own clock, not heldDownSecs, so a plugin outside this one that
 // rewrites heldDownSecs cannot make one press look like many.
 //
-// HOW LONG IS A HOLD. kHoldSecs, or TK Dodge AIO's fSprintingPressDuration when its sprint tap is on and that is longer: a press
+// HOW LONG IS A HOLD. The INI's fHoldSeconds; at 0 (automatic, the default) kHoldSecs, or TK Dodge AIO's fSprintingPressDuration
+// when its sprint tap is on and that is longer: a press
 // TK Dodge still counts as a dodge tap must not also crouch or sprint.
 //
 // CROUCH. The game's own sneak setter (1.5.97 id 36926) as Separate Swimming Controls replays its off branch: the iIsInSneak graph
@@ -39,6 +41,7 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <mutex>
 #include <thread>
@@ -47,8 +50,10 @@ namespace sprint
 {
 	namespace
 	{
-		constexpr float kHoldSecs = 0.30f;        // a press held this long is a hold
-		constexpr std::int64_t kGapMs = 250;       // no event for this long: the button was let go where this handler could not hear it
+		// The INI's defaults (dist\SKSE\Plugins\SprintOrSneakForController.ini ships the same values; rule 16).
+		constexpr float kAutoHold = 0.0f;          // fHoldSeconds=0: automatic, kHoldSecs or TK Dodge AIO's tap time
+		constexpr float kHoldSecs = 0.30f;         // the automatic hold without TK Dodge's sprint tap
+		constexpr float kDefaultGapSecs = 0.25f;   // fReleaseGapSeconds: no event for this long, the button was let go unheard
 		constexpr float kMoveDeadzone = 0.15f;     // the left stick's push that counts as moving (moveInputVec length)
 
 		enum class Mode : int
@@ -72,7 +77,9 @@ namespace sprint
 		Hold g_hold;
 
 		std::atomic<bool> g_installed{ false };
-		std::atomic<float> g_holdSecs{ kHoldSecs };
+		std::atomic<float> g_holdSecs{ kHoldSecs };       // in force
+		std::atomic<float> g_holdSetting{ kAutoHold };    // as the INI has it
+		std::atomic<std::int64_t> g_gapMs{ 250 };
 		std::atomic<bool> g_dodgeRead{ false };
 		std::atomic<bool> g_dodgeSprintTap{ false };
 		std::atomic<float> g_dodgeTapSecs{ 0.0f };
@@ -228,7 +235,7 @@ namespace sprint
 				if (down)
 				{
 					// A new press: the button was up, or nothing was heard from it for longer than a frame takes.
-					if (g_hold.mode == Mode::kNone || now - g_hold.lastEventAt > kGapMs)
+					if (g_hold.mode == Mode::kNone || now - g_hold.lastEventAt > g_gapMs.load(std::memory_order_relaxed))
 					{
 						if (g_hold.mode != Mode::kNone) { EndHold("not heard from"); }
 						g_hold.mode = Mode::kUndecided;
@@ -304,6 +311,30 @@ namespace sprint
 			return from == std::string::npos ? std::string{} : a_text.substr(from, to - from + 1);
 		}
 
+		float ReadFloat(const std::string& a_value, float a_fallback)
+		{
+			try { return std::stof(a_value); }
+			catch (...) { return a_fallback; }
+		}
+
+		// key = value lines of an INI, sections ignored (the keys here are unique), ';' comments dropped.
+		template <class Fn>
+		void ReadIni(const std::filesystem::path& a_path, bool& a_found, Fn&& a_fn)
+		{
+			a_found = false;
+			std::ifstream in{ a_path };
+			if (!in) { return; }
+			a_found = true;
+			std::string line;
+			while (std::getline(in, line))
+			{
+				if (const auto semi = line.find(';'); semi != std::string::npos) { line.resize(semi); }
+				const auto eq = line.find('=');
+				if (eq == std::string::npos) { continue; }
+				a_fn(Trim(line.substr(0, eq)), Trim(line.substr(eq + 1)));
+			}
+		}
+
 		// One frame of a driven hold: the event goes to the game's SprintHandler through its vtable, as the pad's would.
 		void DriveFrame(std::uint64_t a_id, bool a_down)
 		{
@@ -328,7 +359,7 @@ namespace sprint
 
 	void Install()
 	{
-		ReadDodgeTap();
+		ReadSettings();
 		if (auto* tasks = SKSE::GetTaskInterface())
 		{
 			tasks->AddTask([] { WriteHook(); });
@@ -341,38 +372,44 @@ namespace sprint
 		}
 	}
 
-	void ReadDodgeTap()
+	void ReadSettings()
 	{
 		std::error_code ec;
-		const auto path = std::filesystem::current_path(ec) / "Data" / "SKSE" / "Plugins" / "TK Dodge AIO.ini";
+		const auto plugins = std::filesystem::current_path(ec) / "Data" / "SKSE" / "Plugins";
+
+		// This mod's own INI (the owner, 2026-11-07: no in-game page, an INI for the delays). A missing key keeps its default.
+		bool ownFound = false;
+		float setHold = kAutoHold;
+		float gap = kDefaultGapSecs;
+		ReadIni(plugins / "SprintOrSneakForController.ini", ownFound, [&](const std::string& a_key, const std::string& a_value) {
+			if (a_key == "fHoldSeconds") { setHold = ReadFloat(a_value, kAutoHold); }
+			else if (a_key == "fReleaseGapSeconds") { gap = ReadFloat(a_value, kDefaultGapSecs); }
+		});
+		setHold = setHold <= 0.0f ? kAutoHold : std::clamp(setHold, 0.05f, 2.0f);
+		gap = std::clamp(gap, 0.05f, 2.0f);
+
+		// TK Dodge AIO's sprint tap: the automatic hold follows its tap time.
 		bool found = false, tap = false;
 		float secs = 0.0f;
-		if (std::ifstream in{ path }; in)
-		{
-			found = true;
-			std::string line;
-			while (std::getline(in, line))
-			{
-				const auto eq = line.find('=');
-				if (eq == std::string::npos || line.starts_with(';')) { continue; }
-				const std::string key = Trim(line.substr(0, eq));
-				const std::string value = Trim(line.substr(eq + 1, line.find(';', eq) == std::string::npos ? std::string::npos : line.find(';', eq) - eq - 1));
-				if (key == "bUseSprintKey") { tap = ReadBool(value); }
-				else if (key == "fSprintingPressDuration")
-				{
-					try { secs = std::stof(value); }
-					catch (...) { secs = 0.0f; }
-				}
-			}
-		}
+		ReadIni(plugins / "TK Dodge AIO.ini", found, [&](const std::string& a_key, const std::string& a_value) {
+			if (a_key == "bUseSprintKey") { tap = ReadBool(a_value); }
+			else if (a_key == "fSprintingPressDuration") { secs = ReadFloat(a_value, 0.0f); }
+		});
 		g_dodgeRead = found;
 		g_dodgeSprintTap = tap;
 		g_dodgeTapSecs = secs;
-		const float hold = tap ? std::clamp(std::max(kHoldSecs, secs), kHoldSecs, 1.5f) : kHoldSecs;
-		if (g_holdSecs.exchange(hold) != hold || !found)
+
+		const bool automatic = setHold == kAutoHold;
+		const float hold = !automatic ? setHold : (tap ? std::clamp(std::max(kHoldSecs, secs), kHoldSecs, 1.5f) : kHoldSecs);
+		g_holdSetting = setHold;
+		g_holdSecs = hold;
+		g_gapMs = static_cast<std::int64_t>(gap * 1000.0f + 0.5f);
+		logger::info("sprint: settings {}: fHoldSeconds={:.2f} ({}), fReleaseGapSeconds={:.2f}; TK Dodge AIO {}; a hold is {:.2f} s",
+			ownFound ? "read" : "file not found, defaults", automatic ? 0.0f : setHold, automatic ? "automatic" : "set", gap,
+			found ? (tap ? std::format("sprint tap on ({:.2f} s)", secs) : std::string("sprint tap off")) : std::string("not found"), hold);
+		if (!automatic && tap && setHold < secs)
 		{
-			if (!found) { logger::info("sprint: TK Dodge AIO's settings not found; a hold is {:.2f} s", hold); }
-			else { logger::info("sprint: TK Dodge AIO sprint tap {} ({:.2f} s); a hold is {:.2f} s", tap ? "on" : "off", secs, hold); }
+			logger::warn("sprint: fHoldSeconds {:.2f} is shorter than TK Dodge AIO's tap time {:.2f}: a press between them both dodges and crouches or sprints", setHold, secs);
 		}
 	}
 
@@ -410,6 +447,8 @@ namespace sprint
 		s.installed = g_installed.load();
 		s.outermost = g_installed.load() && g_slot && *reinterpret_cast<const std::uintptr_t*>(g_slot) == g_hookFn;
 		s.holdSecs = g_holdSecs.load();
+		s.holdSetting = g_holdSetting.load();
+		s.releaseGapSecs = static_cast<float>(g_gapMs.load()) / 1000.0f;
 		s.dodgeTapRead = g_dodgeRead.load();
 		s.dodgeSprintTap = g_dodgeSprintTap.load();
 		s.dodgeTapSecs = g_dodgeTapSecs.load();
