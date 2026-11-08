@@ -166,21 +166,19 @@ namespace sprint
 		{
 			const int forced = g_forceMoving.load(std::memory_order_relaxed);
 			if (forced >= 0) { return forced == 1; }
-			if (!a_data) { return false; }
-			const auto& v = a_data->moveInputVec;
-			const bool input = v.x * v.x + v.y * v.y > kMoveDeadzone * kMoveDeadzone;
-#if RUNTIME_LINE == 17
-			// On 1.7 moveInputVec keeps the last input batch's value, so a "forward" can outlive the stick's release; the
-			// game's own per-frame direction bits on the player's ActorState settle it (Walk or Run for Controller 1.2.1).
-			if (!input) { return false; }
+			// The game's own per-frame direction bits on the player's ActorState decide. moveInputVec is only rewritten when
+			// the stick's value changes, so a steady push can read as still (a crouch while walking, the owner's test
+			// 2026-11-08), and on 1.7 a "forward" can outlive the stick's release (Walk or Run for Controller 1.2.1).
 			auto* player = RE::PlayerCharacter::GetSingleton();
 			auto* state = player ? player->AsActorState() : nullptr;
-			if (!state) { return true; }
-			const auto& s1 = state->actorState1;
-			return s1.movingBack || s1.movingForward || s1.movingRight || s1.movingLeft;
-#else
-			return input;
-#endif
+			if (state)
+			{
+				const auto& s1 = state->actorState1;
+				return s1.movingBack || s1.movingForward || s1.movingRight || s1.movingLeft;
+			}
+			if (!a_data) { return false; }
+			const auto& v = a_data->moveInputVec;
+			return v.x * v.x + v.y * v.y > kMoveDeadzone * kMoveDeadzone;
 		}
 
 		void EndHold(const char* a_why)
@@ -217,6 +215,11 @@ namespace sprint
 			const bool sneaking = state->IsSneaking();
 			const bool swimming = state->IsSwimming();
 			if (g_hold.mode == Mode::kSprint) { return; }
+			if (g_hold.mode == Mode::kUndecided && !g_hold.crouchChanged)
+			{
+				const auto& v = a_data ? a_data->moveInputVec : RE::NiPoint2{};
+				logger::info("sprint: hold decided: {} (stick {:.2f},{:.2f}; {})", moving ? "moving" : "still", v.x, v.y, sneaking ? "crouched" : "standing");
+			}
 			if (moving)
 			{
 				if (!sneaking)
