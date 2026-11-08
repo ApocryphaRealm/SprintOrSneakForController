@@ -2,7 +2,7 @@
 
 Rule 61: this mod's own history, kept beside the code it describes.
 
-## 1.0.0 - 2026-11-07 - untested
+## 1.0.0 - 2026-11-07 - working
 
 ### Added
 - [Debug] uLogLevel in the INI (2 = info by default: each hold's decision is logged, not every press).
