@@ -41,8 +41,11 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 	if (!AddressLibraryGuard::Guard("Sprint or Sneak for Controller")) { return true; }
 	SKSE::Init(a_skse);
 
-	// The INI holds only the delays, so the log level is fixed: debug, a few lines per press (rule 14).
-	SKSE::log::set_level(spdlog::level::debug, spdlog::level::info);
+	// [Debug] uLogLevel: 0 trace ... 2 info (the default: each hold's decision, no per-press lines) ... 6 off (rule 14).
+	// Read here, before any setting is read, so the first lines already obey it.
+	const auto ini = (std::filesystem::current_path() / "Data" / "SKSE" / "Plugins" / "SprintOrSneakForController.ini").string();
+	const auto level = static_cast<int>(::GetPrivateProfileIntA("Debug", "uLogLevel", 2, ini.c_str()));
+	SKSE::log::set_level(static_cast<spdlog::level::level_enum>(std::clamp(level, 0, 6)), spdlog::level::info);
 	logger::info("Sprint or Sneak for Controller {} loading", SKSE::PluginDeclaration::GetSingleton()->GetVersion().string("."));
 
 	auto* messaging = SKSE::GetMessagingInterface();
