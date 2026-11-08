@@ -168,7 +168,19 @@ namespace sprint
 			if (forced >= 0) { return forced == 1; }
 			if (!a_data) { return false; }
 			const auto& v = a_data->moveInputVec;
-			return v.x * v.x + v.y * v.y > kMoveDeadzone * kMoveDeadzone;
+			const bool input = v.x * v.x + v.y * v.y > kMoveDeadzone * kMoveDeadzone;
+#if RUNTIME_LINE == 17
+			// On 1.7 moveInputVec keeps the last input batch's value, so a "forward" can outlive the stick's release; the
+			// game's own per-frame direction bits on the player's ActorState settle it (Walk or Run for Controller 1.2.1).
+			if (!input) { return false; }
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			auto* state = player ? player->AsActorState() : nullptr;
+			if (!state) { return true; }
+			const auto& s1 = state->actorState1;
+			return s1.movingBack || s1.movingForward || s1.movingRight || s1.movingLeft;
+#else
+			return input;
+#endif
 		}
 
 		void EndHold(const char* a_why)
@@ -324,11 +336,18 @@ namespace sprint
 		{
 			if (g_installed) { return; }
 			REL::Relocation<std::uintptr_t> vtable{ RE::VTABLE_SprintHandler[0] };
-			SprintHandlerHook::original = vtable.write_vfunc(4, SprintHandlerHook::ProcessButton);
-			g_slot = vtable.address() + 4 * sizeof(std::uintptr_t);
+#if RUNTIME_LINE == 17
+			// Skyrim 1.7 put two new functions at slots 4 and 5 of every player input handler's vtable, so ProcessButton
+			// moved to slot 6; CommonLibSSE-NG 7.2 still names slot 4 (found in Walk or Run for Controller, 2026-11-08).
+			constexpr std::size_t kSlot = 6;
+#else
+			constexpr std::size_t kSlot = 4;
+#endif
+			SprintHandlerHook::original = vtable.write_vfunc(kSlot, SprintHandlerHook::ProcessButton);
+			g_slot = vtable.address() + kSlot * sizeof(std::uintptr_t);
 			g_hookFn = reinterpret_cast<std::uintptr_t>(&SprintHandlerHook::ProcessButton);
 			g_installed = true;
-			logger::info("sprint: SprintHandler slot 4 hooked (the function it held is called on: {:X})", SprintHandlerHook::original.address());
+			logger::info("sprint: SprintHandler slot {} hooked (the function it held is called on: {:X})", kSlot, SprintHandlerHook::original.address());
 			if (auto* ui = RE::UI::GetSingleton()) { ui->AddEventSink<RE::MenuOpenCloseEvent>(MenuSink::Get()); }
 		}
 
