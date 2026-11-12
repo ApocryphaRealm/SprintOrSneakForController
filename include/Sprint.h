@@ -35,6 +35,7 @@ namespace sprint
 		std::uint64_t taps = 0;          // released before holdSecs: left to the other mods
 		std::uint64_t crouchOn = 0;
 		std::uint64_t crouchOff = 0;     // stood up by a still hold
+		std::uint64_t eyeHides = 0;      // stand-ups (still or moving) after which the HUD's sneak eye was told to hide
 		std::uint64_t sprintHolds = 0;   // holds that became a sprint
 		std::uint64_t standAndSprint = 0;  // of those, the ones that stood the player up first
 		std::uint64_t passedMounted = 0;   // events left wholly to the game: on horseback

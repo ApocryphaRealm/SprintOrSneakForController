@@ -2,6 +2,14 @@
 
 Rule 61: this mod's own history, kept beside the code it describes.
 
+## 1.1.1 - 2026-11-12 - untested
+
+### Fixed
+- The HUD's sneak eye no longer stays on screen after this mod stands you up (Nexus report, 2026-11-12: "a persistent sneak eye icon even after I stop sneaking. Installing Contextual Crosshair fixed it"). The player did stand up; only the HUD was not told. The eye is shown and hidden only by a kCrosshairSneak HUD message from the game's stealth update, which the player's per-frame update runs only while sneaking, and which the game's own sneak changes run once more after the change; this mod's stand-up (the sneak setter's own writes, so Sneak-button listeners see no press) skipped that last run. After a stand-up, still or moving, the HUD now gets the message the game's update sends with sneaking off (show off, level 0), made and posted with the same two calls the game's sender uses (include/StealthMeter.h). Crouching, sprinting, taps, the dodge referee and Take a Peek are unchanged. sos.control state shows eyeHides.
+
+### Added
+- Offline tests: tests/test_stealth_meter.cpp (16 cases, run by tests/run-tests.ps1 with the 152 press-referee cases) - a model of the game's stealth meter reproduces the stuck eye with 1.1.0's stand-up and shows it gone with 1.1.1's, with the game's own Sneak, mixed rounds and one message per stand-up; tests/check-game-hud.py checks the game facts the fix rests on against the 1.5.97 and 1.7.104 code dumps (the message's layout in StealthMeter's ProcessMessage on both, its only senders, the per-frame update's sneaking gate).
+
 ## 1.1.0 - 2026-11-12 - untested
 
 ### Fixed

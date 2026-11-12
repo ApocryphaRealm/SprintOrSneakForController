@@ -44,11 +44,18 @@
 // CROUCH. The game's own sneak setter (1.5.97 id 36926) as Separate Swimming Controls replays its off branch: the iIsInSneak graph
 // variable, ActorState's sneaking bit, and the SneakStart / SneakStop graph event. It is not reached through the SneakHandler, so a
 // mod that listens to the Sneak button (TK Dodge's sneak-key dodge, Take a Peek's hold-Sneak-to-peek) sees no press from it.
+//
+// THE SNEAK EYE (1.1.1, Nexus report 2026-11-12: "a persistent sneak eye icon even after I stop sneaking"). The HUD's eye is
+// shown and hidden only by a kCrosshairSneak HUD message, sent by the game's stealth update, which the player's per-frame
+// update runs only while sneaking; the game's own sneak changes run it once more after the change. This mod's stand-up
+// did not, so the eye stayed over a standing player. After a stand-up the HUD now gets the message the game's update would
+// have sent (include/StealthMeter.h).
 #include "PCH.h"
 
 #include "Sprint.h"
 
 #include "PressReferee.h"
+#include "StealthMeter.h"
 
 #include "utils/Logger.h"
 
@@ -105,6 +112,7 @@ namespace sprint
 		std::atomic<int> g_dodgeMod{ 0 };          // whose tap time is in force: 0 none, 1 TK Dodge AIO, 2 Simple Dodge, 3 both
 		std::atomic<std::uint64_t> g_refereed{ 0 }; // events shown to the chain with a changed held time
 		std::atomic<std::uint64_t> g_events{ 0 }, g_presses{ 0 }, g_taps{ 0 }, g_crouchOn{ 0 }, g_crouchOff{ 0 }, g_sprintHolds{ 0 }, g_standAndSprint{ 0 }, g_passedMounted{ 0 }, g_leftToPeek{ 0 };
+		std::atomic<std::uint64_t> g_eyeHides{ 0 };  // stand-ups after which the HUD's sneak eye was told to hide (1.1.1)
 		std::atomic<bool> g_takeAPeekLoaded{ false };
 		std::atomic<bool> g_takeAPeekDoors{ true };  // bTakeAPeekDoors
 		std::atomic<int> g_modeShown{ 0 };
@@ -160,7 +168,38 @@ namespace sprint
 			if (auto* player = RE::PlayerCharacter::GetSingleton()) { player->GetPlayerRuntimeData().playerFlags.isSprinting = a_on; }
 		}
 
-		// The game's sneak setter, both branches (see the head). Main thread.
+		// The HUD message the game's stealth update (1.5.97 id 39514, through id 50728) sends: kCrosshairSneak to the HUD menu,
+		// made by the UI message queue's own HUDData factory. Main thread, as the game sends it.
+		bool SendStealthMeter(const stealth::Message& a_msg)
+		{
+			auto* queue = RE::UIMessageQueue::GetSingleton();
+			auto* strings = RE::InterfaceStrings::GetSingleton();
+			if (!queue || !strings)
+			{
+				logger::warn("sprint: no UI message queue or interface strings; the sneak eye was not told");
+				return false;
+			}
+			auto* data = static_cast<RE::HUDData*>(queue->CreateUIMessageData(strings->hudData));
+			if (!data)
+			{
+				logger::warn("sprint: no HUDData from the UI message queue; the sneak eye was not told");
+				return false;
+			}
+#if RUNTIME_LINE == 17
+			data->type = RE::HUD_MESSAGE_TYPE::kCrosshairSneak;
+			data->show = a_msg.show;
+			data->discovery = static_cast<RE::MARKER_TYPE>(a_msg.level);
+#else
+			data->type = RE::HUDData::Type::kCrosshairSneak;
+			data->unk40 = a_msg.show ? 1 : 0;
+			data->discovery = static_cast<RE::HUDData::Discovery>(a_msg.level);
+#endif
+			queue->AddMessage(strings->hudMenu, RE::UI_MESSAGE_TYPE::kUpdate, data);
+			return true;
+		}
+
+		// The game's sneak setter, both branches (see the head), then what the game's own sneak changes do next: the HUD's
+		// sneak eye is told (include/StealthMeter.h). Main thread.
 		void SetSneaking(bool a_on)
 		{
 			auto* player = RE::PlayerCharacter::GetSingleton();
@@ -170,11 +209,15 @@ namespace sprint
 				logger::warn("sprint: no player state; crouch not changed");
 				return;
 			}
-			if (state->IsSneaking() == a_on) { return; }
+			const bool before = state->IsSneaking();
+			if (before == a_on) { return; }
 			player->SetGraphVariableInt("iIsInSneak", a_on ? 1 : 0);
 			state->actorState1.sneaking = a_on ? 1 : 0;
 			const bool sent = player->NotifyAnimationGraph(a_on ? "SneakStart" : "SneakStop");
-			logger::debug("sprint: sneaking {} (graph event {})", a_on ? "on" : "off", sent ? "taken" : "not taken");
+			const auto msg = stealth::AfterCrouchChange(before, state->IsSneaking());
+			const bool told = msg.send && SendStealthMeter(msg);
+			if (told) { g_eyeHides.fetch_add(1, std::memory_order_relaxed); }
+			logger::debug("sprint: sneaking {} (graph event {}){}", a_on ? "on" : "off", sent ? "taken" : "not taken", told ? "; the HUD's sneak eye told to hide" : "");
 		}
 
 		bool Moving(const RE::PlayerControlsData* a_data)
@@ -627,6 +670,7 @@ namespace sprint
 		s.taps = g_taps.load();
 		s.crouchOn = g_crouchOn.load();
 		s.crouchOff = g_crouchOff.load();
+		s.eyeHides = g_eyeHides.load();
 		s.sprintHolds = g_sprintHolds.load();
 		s.standAndSprint = g_standAndSprint.load();
 		s.passedMounted = g_passedMounted.load();
