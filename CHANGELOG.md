@@ -2,6 +2,15 @@
 
 Rule 61: this mod's own history, kept beside the code it describes.
 
+## 1.1.0 - 2026-11-12 - untested
+
+### Fixed
+- With a dodge mod's Sprint-tap dodge on (Simple Dodge, TK Dodge AIO), holding Sprint on a controller now sprints (the owner, 2026-11-12: it would only sprint after a double press). Both mods held the same press on two clocks: when this mod decided the hold a frame before the game's held time reached the dodge window, the dodge mod saw the sprint flag already on and never handed the game the press that starts a sprint. This mod's clock now decides and the dodge mod is shown the answer through the held time it reads (include/PressReferee.h): under its window until the press is a hold, at or over it from then, the sprint flag cleared on the event the sprint starts; the event's own value is put back afterwards. A tap stays the dodge's (single or double tap), a hold sprints or crouches, never both.
+
+### Added
+- Offline tests (tests/run-tests.ps1, 152 cases): hold, still hold, crouched hold, tap, double press, tap-then-hold and near-threshold presses against copies of Simple Dodge 1.0.0's and 1.1.0's Sprint hook, single and double tap, with the game's held time in step, behind and ahead; and the 1.0.0 failure reproduced.
+- Simple Dodge recognised like TK Dodge AIO: its DLL (SimpleDodge.dll) and SKSE/Plugins/Simple Dodge.ini are read for bUseSprintKey, fSprintingPressDuration, bUseDoubleTap and uDodgeKey; the automatic hold (fHoldSeconds = 0) follows the longer tap time of the dodge mods whose DLL is loaded with their Sprint tap on. A dodge mod's INI without its DLL loaded no longer counts. The load log names which dodge mod's tap time was taken; a warning when a dodge key is the controller's Sprint button. sos.control state shows dodgeMod, refereeSecs and refereed.
+
 ## 1.0.0 - 2026-11-07 - working
 
 ### Added

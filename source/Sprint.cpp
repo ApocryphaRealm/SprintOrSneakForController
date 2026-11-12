@@ -5,7 +5,7 @@
 //   - standing still, HOLD Sprint: crouch changes - standing to sneaking, sneaking to standing;
 //   - moving, HOLD Sprint: sprint, only while the button is held. Crouched, it stands you up and sprints;
 //   - one continuous hold changes crouch once at most; the next change needs a fresh press;
-//   - a TAP does nothing here, so a dodge mod's sprint tap (TK Dodge AIO's bUseSprintKey) keeps working.
+//   - a TAP does nothing here, so a dodge mod's sprint tap (TK Dodge AIO's or Simple Dodge's bUseSprintKey) keeps working.
 // No in-game page (the owner, 2026-11-07); the delays are in SKSE/Plugins/SprintOrSneakForController.ini. The keyboard's Sprint key and riding
 // a horse are left wholly to the game.
 //
@@ -24,9 +24,18 @@
 // frame's update reads it. A hold is told from a tap by this mod's own clock, not heldDownSecs, so a plugin outside this one that
 // rewrites heldDownSecs cannot make one press look like many.
 //
-// HOW LONG IS A HOLD. The INI's fHoldSeconds; at 0 (automatic, the default) kHoldSecs, or TK Dodge AIO's fSprintingPressDuration
-// when its sprint tap is on and that is longer: a press
-// TK Dodge still counts as a dodge tap must not also crouch or sprint.
+// HOW LONG IS A HOLD. The INI's fHoldSeconds; at 0 (automatic, the default) kHoldSecs, or the dodge mod's fSprintingPressDuration
+// (TK Dodge AIO's or Simple Dodge's, the longer when both are on) when its sprint tap is on and that is longer: a press the dodge
+// mod still counts as a dodge tap must not also crouch or sprint.
+//
+// ONE PRESS, ONE OWNER (1.1.0, the owner, 2026-11-12, with Simple Dodge 1.0.0's Sprint tap on: "I'm not able to sprint unless I
+// double tap to sprint"). The dodge mod holds the Sprint events back from the game until the game's heldDownSecs passes its tap
+// window, then hands the game the press as a fresh one - only while the sprint flag is off. This mod decided on its own clock and
+// wrote the flag on; a frame ahead of the game's held time, the dodge mod saw the flag on, took the press for one that stops a
+// sprint, and the game never got the press that starts one. Now this mod's clock decides and the dodge mod is told the answer
+// through the held time it reads (include/PressReferee.h): under its window until the press is a hold, at or over it from then,
+// with the flag cleared on the event the sprint starts so the dodge mod passes that press on. Its tap (dodge) and its own
+// delayed-press release stay its own; this mod only decides which one a press is.
 //
 // TAKE A PEEK (the owner, 2026-11-07: holding near a door would be both a peek and a crouch change). While Take A Peek - New Stealth
 // Mechanic.esp is loaded and the INI's bTakeAPeekDoors is on, a hold made crouched and still with the crosshair on a closed door (Take
@@ -38,6 +47,8 @@
 #include "PCH.h"
 
 #include "Sprint.h"
+
+#include "PressReferee.h"
 
 #include "utils/Logger.h"
 
@@ -55,8 +66,9 @@ namespace sprint
 	namespace
 	{
 		// The INI's defaults (dist\SKSE\Plugins\SprintOrSneakForController.ini ships the same values; rule 16).
-		constexpr float kAutoHold = 0.0f;          // fHoldSeconds=0: automatic, kHoldSecs or TK Dodge AIO's tap time
-		constexpr float kHoldSecs = 0.30f;         // the automatic hold without TK Dodge's sprint tap
+		constexpr float kAutoHold = 0.0f;          // fHoldSeconds=0: automatic, kHoldSecs or the dodge mod's tap time
+		constexpr float kHoldSecs = 0.30f;         // the automatic hold without a dodge mod's sprint tap
+		constexpr float kDodgeDefaultSecs = 0.30f; // both dodge mods' fSprintingPressDuration default
 		constexpr float kDefaultGapSecs = 0.25f;   // fReleaseGapSeconds: no event for this long, the button was let go unheard
 		constexpr bool kDefaultTakeAPeekDoors = true;  // bTakeAPeekDoors: a crouched, still hold at a closed door is Take a Peek's
 		constexpr std::string_view kTakeAPeekPlugin = "Take A Peek - New Stealth Mechanic.esp";
@@ -89,6 +101,9 @@ namespace sprint
 		std::atomic<bool> g_dodgeRead{ false };
 		std::atomic<bool> g_dodgeSprintTap{ false };
 		std::atomic<float> g_dodgeTapSecs{ 0.0f };
+		std::atomic<float> g_refereeSecs{ 0.0f };  // the dodge tap window the inner chain is refereed against; 0 = none
+		std::atomic<int> g_dodgeMod{ 0 };          // whose tap time is in force: 0 none, 1 TK Dodge AIO, 2 Simple Dodge, 3 both
+		std::atomic<std::uint64_t> g_refereed{ 0 }; // events shown to the chain with a changed held time
 		std::atomic<std::uint64_t> g_events{ 0 }, g_presses{ 0 }, g_taps{ 0 }, g_crouchOn{ 0 }, g_crouchOff{ 0 }, g_sprintHolds{ 0 }, g_standAndSprint{ 0 }, g_passedMounted{ 0 }, g_leftToPeek{ 0 };
 		std::atomic<bool> g_takeAPeekLoaded{ false };
 		std::atomic<bool> g_takeAPeekDoors{ true };  // bTakeAPeekDoors
@@ -260,6 +275,27 @@ namespace sprint
 			}
 		}
 
+		using ProcessButtonFn = void(RE::SprintHandler*, RE::ButtonEvent*, RE::PlayerControlsData*);
+
+		// The event goes down the chain as include/PressReferee.h says: with a dodge mod's Sprint tap on, the held time the
+		// chain reads carries this mod's decision; the event's own value is put back afterwards.
+		void PassOn(ProcessButtonFn* a_original, RE::SprintHandler* a_this, RE::ButtonEvent* a_event, RE::PlayerControlsData* a_data,
+			bool a_down, bool a_decided, bool a_startsSprint)
+		{
+			auto& rt = a_event->GetRuntimeData();
+			const float reported = rt.heldDownSecs;
+			const auto shown = referee::Show(g_refereeSecs.load(std::memory_order_relaxed), a_down, a_decided, a_startsSprint, reported);
+			if (shown.clearFlagFirst) { SetSprintFlag(false); }
+			if (shown.heldSecs != reported)
+			{
+				g_refereed.fetch_add(1, std::memory_order_relaxed);
+				if (!a_down || a_startsSprint) { logger::debug("sprint: {} shown to the dodge mod as held {:.2f} s (game {:.2f} s)", a_down ? "sprint start" : (a_decided ? "release of a hold" : "release of a tap"), shown.heldSecs, reported); }
+			}
+			rt.heldDownSecs = shown.heldSecs;
+			a_original(a_this, a_event, a_data);
+			rt.heldDownSecs = reported;
+		}
+
 		struct SprintHandlerHook
 		{
 			static void ProcessButton(RE::SprintHandler* a_this, RE::ButtonEvent* a_event, RE::PlayerControlsData* a_data)
@@ -294,11 +330,15 @@ namespace sprint
 					}
 					g_hold.lastEventAt = now;
 					const float heldSecs = static_cast<float>(now - g_hold.pressedAt) / 1000.0f;
+					const Mode before = g_hold.mode;
 					if (heldSecs >= g_holdSecs.load(std::memory_order_relaxed)) { Decide(player, a_data); }
 					Publish(heldSecs);
 					// A hold that changed crouch keeps its repeats from the chain: none of them is a tap, and Walk or Run would
 					// otherwise answer "run" to a sneaking player who starts moving with the button still down.
-					if (g_hold.mode != Mode::kCrouch) { original(a_this, a_event, a_data); }
+					if (g_hold.mode != Mode::kCrouch)
+					{
+						PassOn(original.get(), a_this, a_event, a_data, true, g_hold.mode == Mode::kSprint, before != Mode::kSprint && g_hold.mode == Mode::kSprint);
+					}
 					SetSprintFlag(g_hold.mode == Mode::kSprint);
 					return;
 				}
@@ -309,7 +349,9 @@ namespace sprint
 					g_taps.fetch_add(1, std::memory_order_relaxed);
 					SetLast("tap: left to the other mods");
 				}
-				original(a_this, a_event, a_data);
+				// A release with no press heard (the hold ended when a menu opened) goes on as it came.
+				if (g_hold.mode == Mode::kNone) { original(a_this, a_event, a_data); }
+				else { PassOn(original.get(), a_this, a_event, a_data, false, g_hold.mode != Mode::kUndecided, false); }
 				SetSprintFlag(false);
 				EndHold("let go");
 			}
@@ -450,29 +492,85 @@ namespace sprint
 		setHold = setHold <= 0.0f ? kAutoHold : std::clamp(setHold, 0.05f, 2.0f);
 		gap = std::clamp(gap, 0.05f, 2.0f);
 
-		// TK Dodge AIO's sprint tap: the automatic hold follows its tap time.
+		// The dodge mods with a Sprint-tap dodge (both read the same keys, from TK Dodge RE): the automatic hold follows the longer
+		// tap time of those whose DLL is loaded and whose bUseSprintKey is on, and the chain is refereed against it (PressReferee.h).
+		struct DodgeMod
+		{
+			const char* name;
+			const char* ini;
+			const char* dll;
+			bool iniFound = false;
+			bool loaded = false;
+			bool sprintTap = false;
+			bool doubleTap = false;
+			float secs = kDodgeDefaultSecs;
+			long dodgeKey = -1;
+		};
+		DodgeMod mods[2] = { { "TK Dodge AIO", "TK Dodge AIO.ini", "TK_Dodge_RE.dll" }, { "Simple Dodge", "Simple Dodge.ini", "SimpleDodge.dll" } };
+		std::uint32_t sprintPadKey = 0;  // the controller button Sprint is mapped to, as an SKSE key code (266+), 0 unknown
+		if (auto* map = RE::ControlMap::GetSingleton(); map && RE::UserEvents::GetSingleton())
+		{
+			const auto mask = map->GetMappedKey(RE::UserEvents::GetSingleton()->sprint, RE::INPUT_DEVICE::kGamepad);
+			if (mask != RE::ControlMap::kInvalid) { sprintPadKey = SKSE::InputMap::GamepadMaskToKeycode(mask); }
+		}
 		bool found = false, tap = false;
 		float secs = 0.0f;
-		ReadIni(plugins / "TK Dodge AIO.ini", found, [&](const std::string& a_key, const std::string& a_value) {
-			if (a_key == "bUseSprintKey") { tap = ReadBool(a_value); }
-			else if (a_key == "fSprintingPressDuration") { secs = ReadFloat(a_value, 0.0f); }
-		});
+		int inForce = 0;
+		std::string named;
+		for (int i = 0; i < 2; ++i)
+		{
+			auto& m = mods[i];
+			ReadIni(plugins / m.ini, m.iniFound, [&](const std::string& a_key, const std::string& a_value) {
+				if (a_key == "bUseSprintKey") { m.sprintTap = ReadBool(a_value); }
+				else if (a_key == "fSprintingPressDuration") { m.secs = ReadFloat(a_value, kDodgeDefaultSecs); }
+				else if (a_key == "bUseDoubleTap") { m.doubleTap = ReadBool(a_value); }
+				else if (a_key == "uDodgeKey") { m.dodgeKey = static_cast<long>(ReadFloat(a_value, -1.0f)); }
+			});
+			m.loaded = ::GetModuleHandleA(m.dll) != nullptr;
+			if (!m.iniFound && !m.loaded) { continue; }
+			logger::info("sprint: {}: {}, {} loaded; bUseSprintKey={}, fSprintingPressDuration={:.2f}, bUseDoubleTap={}, uDodgeKey={}",
+				m.name, m.iniFound ? std::string("settings read") : std::format("{} not found", m.ini), m.loaded ? m.dll : std::format("{} not", m.dll),
+				m.sprintTap ? 1 : 0, m.secs, m.doubleTap ? 1 : 0, m.dodgeKey);
+			if (m.iniFound && !m.loaded) { logger::info("sprint: {}: its DLL is not loaded, so its Sprint tap is not in force", m.name); }
+			if (!m.iniFound || !m.loaded) { continue; }
+			found = true;
+			if (sprintPadKey && m.dodgeKey == static_cast<long>(sprintPadKey))
+			{
+				logger::warn("sprint: {}'s dodge key {} is the controller's Sprint button: a version that dodges on that key's press as well as on the Sprint tap dodges at the start of every hold", m.name, m.dodgeKey);
+			}
+			if (!m.sprintTap) { continue; }
+			const float s = std::clamp(m.secs, 0.05f, 1.5f);
+			tap = true;
+			inForce |= (i + 1);
+			if (s > secs) { secs = s; }
+			named += named.empty() ? m.name : std::string(" and ") + m.name;
+		}
 		g_dodgeRead = found;
 		g_dodgeSprintTap = tap;
 		g_dodgeTapSecs = secs;
+		g_dodgeMod = inForce;
+		g_refereeSecs = tap ? secs : 0.0f;
 
 		const bool automatic = setHold == kAutoHold;
 		const float hold = !automatic ? setHold : (tap ? std::clamp(std::max(kHoldSecs, secs), kHoldSecs, 1.5f) : kHoldSecs);
 		g_holdSetting = setHold;
 		g_holdSecs = hold;
 		g_gapMs = static_cast<std::int64_t>(gap * 1000.0f + 0.5f);
-		logger::info("sprint: settings {}: fHoldSeconds={:.2f} ({}), fReleaseGapSeconds={:.2f}, bTakeAPeekDoors={}; TK Dodge AIO {}; Take a Peek {}; a hold is {:.2f} s",
+		logger::info("sprint: settings {}: fHoldSeconds={:.2f} ({}), fReleaseGapSeconds={:.2f}, bTakeAPeekDoors={}; Take a Peek {}; a hold is {:.2f} s",
 			ownFound ? "read" : "file not found, defaults", automatic ? 0.0f : setHold, automatic ? "automatic" : "set", gap, peekDoors ? 1 : 0,
-			found ? (tap ? std::format("sprint tap on ({:.2f} s)", secs) : std::string("sprint tap off")) : std::string("not found"),
 			g_takeAPeekLoaded.load() ? "loaded" : "not loaded", hold);
+		if (tap)
+		{
+			logger::info("sprint: dodge tap time taken from {}: {:.2f} s; a hold is {:.2f} s ({}); a press is a tap or a hold by this mod's clock, and {} is shown which",
+				named, secs, hold, automatic ? "automatic" : "fHoldSeconds", named);
+		}
+		else
+		{
+			logger::info("sprint: no dodge mod's Sprint tap in force ({}); a hold is {:.2f} s", found ? "TK Dodge AIO / Simple Dodge loaded with bUseSprintKey off" : "TK Dodge AIO and Simple Dodge not loaded", hold);
+		}
 		if (!automatic && tap && setHold < secs)
 		{
-			logger::warn("sprint: fHoldSeconds {:.2f} is shorter than TK Dodge AIO's tap time {:.2f}: a press between them both dodges and crouches or sprints", setHold, secs);
+			logger::warn("sprint: fHoldSeconds {:.2f} is shorter than {}'s tap time {:.2f}: a press longer than {:.2f} s is a hold here, so the dodge's tap is only the shorter presses", setHold, named, secs, setHold);
 		}
 	}
 
@@ -518,6 +616,12 @@ namespace sprint
 		s.dodgeTapRead = g_dodgeRead.load();
 		s.dodgeSprintTap = g_dodgeSprintTap.load();
 		s.dodgeTapSecs = g_dodgeTapSecs.load();
+		{
+			static constexpr const char* kNames[4] = { "none", "TK Dodge AIO", "Simple Dodge", "TK Dodge AIO and Simple Dodge" };
+			s.dodgeMod = kNames[std::clamp(g_dodgeMod.load(), 0, 3)];
+		}
+		s.refereeSecs = g_refereeSecs.load();
+		s.refereed = g_refereed.load();
 		s.events = g_events.load();
 		s.presses = g_presses.load();
 		s.taps = g_taps.load();
