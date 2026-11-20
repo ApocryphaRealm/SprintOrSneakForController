@@ -11,6 +11,9 @@ Rule 61: this mod's own history, kept beside the code it describes.
 ### Added
 - Offline tests: tests/test_stealth_meter.cpp (16 cases, run by tests/run-tests.ps1 with the 152 press-referee cases) - a model of the game's stealth meter reproduces the stuck eye with 1.1.0's stand-up and shows it gone with 1.1.1's, with the game's own Sneak, mixed rounds and one message per stand-up; tests/check-game-hud.py checks the game facts the fix rests on against the 1.5.97 and 1.7.104 code dumps (the message's layout in StealthMeter's ProcessMessage on both, its only senders, the per-frame update's sneaking gate).
 
+### Changed
+- Built without link-time code generation (CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF, gate row dll-built-without-ltcg): MSVC 14.52 output built with /GL + /LTCG is flagged by one antivirus engine family and quarantined on Nexus. No code change.
+
 ## 1.1.0 - 2026-11-12 - untested
 
 ### Fixed
